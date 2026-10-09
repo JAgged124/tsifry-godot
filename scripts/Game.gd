@@ -22,6 +22,7 @@ var games_won := 0
 var best_moves := -1
 var history: Array = []
 var is_day := false
+var in_game := false
 var action_log: PackedStringArray = PackedStringArray()
 var last_fail := ""
 var hint_a := Vector2i(-1, -1)
@@ -146,6 +147,7 @@ func _show(name: String) -> void:
 		"feedback":
 			_draw_feedback()
 	_refresh_toast()
+	_save_meta()
 
 
 func _theme_btn() -> Button:
@@ -196,9 +198,16 @@ func _draw_menu() -> void:
 	stats.add_child(_stat_card("—" if best_moves < 0 else str(best_moves), "Рекорд"))
 	root.add_child(stats)
 
-	var play := _pill("▶  Играть", true)
-	play.pressed.connect(_on_new_pressed)
+	var play := _pill("▶  Продолжить партию" if in_game else "▶  Играть", true)
+	if in_game:
+		play.pressed.connect(func() -> void: _show("play"))
+	else:
+		play.pressed.connect(_on_new_pressed)
 	root.add_child(play)
+	if in_game:
+		var fresh := _pill("Новая партия", false)
+		fresh.pressed.connect(_on_new_pressed)
+		root.add_child(fresh)
 	var howto := _pill("Правила", false)
 	howto.pressed.connect(func() -> void: _show("howto"))
 	root.add_child(howto)
@@ -262,11 +271,11 @@ func _draw_play() -> void:
 
 	var actions := HBoxContainer.new()
 	actions.add_theme_constant_override("separation", 6)
-	actions.add_child(_icon_btn("Назад", _on_undo_pressed))
-	actions.add_child(_icon_btn(str(hints), _on_hint_pressed))
-	actions.add_child(_icon_btn(str(adds_left), _on_add_pressed))
-	actions.add_child(_icon_btn("Новая", _on_new_pressed))
-	actions.add_child(_icon_btn("Баг", func() -> void: _show("feedback")))
+	actions.add_child(_icon_btn("Отмена", _on_undo_pressed))
+	actions.add_child(_icon_btn("Подсказка\n%d" % hints, _on_hint_pressed))
+	actions.add_child(_icon_btn("Дописать\n%d" % adds_left, _on_add_pressed))
+	actions.add_child(_icon_btn("Заново", _on_new_pressed))
+	actions.add_child(_icon_btn("Ошибка", func() -> void: _show("feedback")))
 	root.add_child(actions)
 
 	var scroll := ScrollContainer.new()
@@ -304,9 +313,9 @@ func _icon_btn(text: String, cb: Callable) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	b.custom_minimum_size = Vector2(0, 48)
+	b.custom_minimum_size = Vector2(0, 58)
 	b.focus_mode = Control.FOCUS_NONE
-	b.add_theme_font_size_override("font_size", 12)
+	b.add_theme_font_size_override("font_size", 11)
 	b.add_theme_stylebox_override("normal", _round_style(p.elevated, 12))
 	b.add_theme_stylebox_override("hover", _round_style(p.elevated, 12))
 	b.add_theme_stylebox_override("pressed", _round_style(p.elevated, 12))
@@ -319,9 +328,9 @@ func _cell_btn(r: int, c: int, val) -> Button:
 	var p: Dictionary = _pal()
 	var btn := Button.new()
 	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn.custom_minimum_size = Vector2(0, 64)
+	btn.custom_minimum_size = Vector2(0, 78)
 	btn.focus_mode = Control.FOCUS_NONE
-	btn.add_theme_font_size_override("font_size", 26)
+	btn.add_theme_font_size_override("font_size", 34)
 	var pos := Vector2i(r, c)
 	if val == null:
 		btn.text = "#"
@@ -351,12 +360,13 @@ func _cell_btn(r: int, c: int, val) -> Button:
 	return btn
 
 
-func _back_row(title: String, to := "menu") -> void:
+func _back_row(title: String, to := "") -> void:
 	var p: Dictionary = _pal()
 	var top := HBoxContainer.new()
 	var back := _pill("Назад", false)
 	back.custom_minimum_size = Vector2(88, 40)
-	back.pressed.connect(func() -> void: _show(to))
+	var dest := to if to != "" else ("play" if in_game else "menu")
+	back.pressed.connect(func() -> void: _show(dest))
 	var t := Label.new()
 	t.text = title
 	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -462,7 +472,7 @@ func _draw_feedback() -> void:
 	var p: Dictionary = _pal()
 	_back_row("Ошибка", "play" if not grid.is_empty() else "menu")
 	var note := Label.new()
-	note.text = "Нажми «Скопировать отчёт» — в буфер попадут поле, последняя неудачная пара и лог ходов."
+	note.text = "Откроется письмо на jaggajagged@gmail.com с полем и логом ходов. Нажми «Отправить»."
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	note.add_theme_color_override("font_color", p.muted)
 	ui.root.add_child(note)
@@ -472,7 +482,7 @@ func _draw_feedback() -> void:
 		fail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		fail.add_theme_color_override("font_color", p.fg)
 		ui.root.add_child(fail)
-	var copy := _pill("Сохранить и скопировать отчёт", true)
+	var copy := _pill("Отправить на почту", true)
 	copy.pressed.connect(_on_bug_pressed)
 	ui.root.add_child(copy)
 
@@ -499,7 +509,9 @@ func _on_new_pressed() -> void:
 	extra_adds = 0
 	history.clear()
 	last_fail = ""
+	in_game = true
 	_log("new_game")
+	_save_meta()
 	_show("play")
 
 
@@ -536,6 +548,7 @@ func _tap(r: int, c: int) -> void:
 			if best_moves < 0 or moves < best_moves:
 				best_moves = moves
 			_log("win moves=%d" % moves)
+			in_game = false
 			_save_meta()
 			_show("win")
 			return
@@ -728,10 +741,12 @@ func _on_bug_pressed() -> void:
 	if last_fail != "":
 		report += "Последняя неудачная пара: %s\n" % last_fail
 	report += "\nПоле:\n%s\n\nЛог:\n%s\n" % [_dump_board(), "\n".join(action_log)]
-	DisplayServer.clipboard_set(report)
-	_toast("Отчёт скопирован")
+	var body := report.uri_encode()
+	if body.length() > 1500:
+		body = body.substr(0, 1500)
+	OS.shell_open("mailto:jaggajagged@gmail.com?subject=Цифры%20баг&body=" + body)
+	_toast("Открываю письмо")
 	_log("report")
-	print(report)
 
 
 func _buy_hints() -> void:
@@ -751,9 +766,10 @@ func _buy_adds() -> void:
 		_toast("Не хватает монет")
 		return
 	coins -= 40
-	extra_adds += 2
-	if screen == "play":
+	if in_game:
 		adds_left += 2
+	else:
+		extra_adds += 2
 	_save_meta()
 	_toast("+2 добавления")
 	_show("shop")
@@ -798,6 +814,10 @@ func _save_meta() -> void:
 	cfg.set_value("meta", "is_day", is_day)
 	cfg.set_value("meta", "games_won", games_won)
 	cfg.set_value("meta", "best_moves", best_moves)
+	cfg.set_value("game", "in_game", in_game)
+	cfg.set_value("game", "moves", moves)
+	cfg.set_value("game", "adds_left", adds_left)
+	cfg.set_value("game", "grid", JSON.stringify(grid))
 	cfg.save("user://tsifry.cfg")
 
 
@@ -811,3 +831,12 @@ func _load_meta() -> void:
 	is_day = bool(cfg.get_value("meta", "is_day", false))
 	games_won = int(cfg.get_value("meta", "games_won", 0))
 	best_moves = int(cfg.get_value("meta", "best_moves", -1))
+	in_game = bool(cfg.get_value("game", "in_game", false))
+	if in_game:
+		moves = int(cfg.get_value("game", "moves", 0))
+		adds_left = int(cfg.get_value("game", "adds_left", ADDS_PER_GAME))
+		var parsed = JSON.parse_string(str(cfg.get_value("game", "grid", "[]")))
+		if typeof(parsed) == TYPE_ARRAY and parsed.size() > 0:
+			grid = parsed
+		else:
+			in_game = false
