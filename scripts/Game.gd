@@ -23,6 +23,11 @@ var best_moves := -1
 var history: Array = []
 var is_day := false
 var in_game := false
+var offer := false
+var pay_adds := 0
+var pay_rub := 0
+var ads_used := 0
+var ad_reward := ""
 var action_log: PackedStringArray = PackedStringArray()
 var last_fail := ""
 var hint_a := Vector2i(-1, -1)
@@ -306,6 +311,12 @@ func _draw_play() -> void:
 	board_wrap.add_child(pad)
 	scroll.add_child(board_wrap)
 	root.add_child(scroll)
+	if offer:
+		_draw_offer(root)
+	if pay_adds > 0:
+		_draw_pay(root)
+	if ad_reward != "":
+		_draw_ad(root)
 
 
 func _icon_btn(text: String, cb: Callable) -> Button:
@@ -390,14 +401,22 @@ func _draw_shop() -> void:
 	note.add_theme_color_override("font_color", p.muted)
 	ui.root.add_child(note)
 	_shop_row("3 подсказки", "50 монет", _buy_hints)
-	_shop_row("+2 добавления", "40 монет", _buy_adds)
+	_shop_row("+2 дописывания", "40 монет", _buy_adds)
+	_shop_row("+3 дописывания", "15 ₽", func() -> void: _ask_pay(3, 15))
+	_shop_row("+8 дописываний", "29 ₽", func() -> void: _ask_pay(8, 29))
+	_shop_row("+20 дописываний", "49 ₽", func() -> void: _ask_pay(20, 49))
 	_shop_row("Убрать рекламу", "Куплено" if ads_removed else "280 монет", _buy_no_ads)
 	var h := Label.new()
-	h.text = "За рекламу"
+	h.text = "За рекламу — награда только после конца ролика"
+	h.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	h.add_theme_color_override("font_color", p.muted)
 	ui.root.add_child(h)
-	_shop_row("+50 монет", "Ролик", func() -> void: Ads.show_rewarded(_reward_coins))
-	_shop_row("+2 добавления", "Ролик", func() -> void: Ads.show_rewarded(_reward_adds))
+	_shop_row("+50 монет", "Ролик", func() -> void: _ask_ad("coins"))
+	_shop_row("+1 дописывание", "Ролик, до 3 за партию", func() -> void: _ask_ad("adds"))
+	if pay_adds > 0:
+		_draw_pay(ui.root)
+	if ad_reward != "":
+		_draw_ad(ui.root)
 
 
 func _shop_row(title: String, price: String, cb: Callable) -> void:
@@ -510,6 +529,9 @@ func _on_new_pressed() -> void:
 	history.clear()
 	last_fail = ""
 	in_game = true
+	ads_used = 0
+	offer = false
+	pay_adds = 0
 	_log("new_game")
 	_save_meta()
 	_show("play")
@@ -658,8 +680,8 @@ func _log(msg: String) -> void:
 
 func _on_add_pressed() -> void:
 	if adds_left <= 0:
-		_toast("Нет добавлений — лавка или реклама")
-		_log("add_denied")
+		offer = true
+		_show("play")
 		return
 	var rem: Array = []
 	for row in grid:
@@ -677,10 +699,108 @@ func _on_add_pressed() -> void:
 	selected = Vector2i(-1, -1)
 	hint_a = Vector2i(-1, -1)
 	hint_b = Vector2i(-1, -1)
+	offer = false
 	_log("add left=%d" % adds_left)
-	if not ads_removed and adds_left % 2 == 0:
-		Ads.show_interstitial()
 	_show("play")
+
+
+func _draw_offer(root: VBoxContainer) -> void:
+	var title := Label.new()
+	title.text = "Дописать ещё"
+	title.add_theme_font_size_override("font_size", 20)
+	title.add_theme_color_override("font_color", _pal().fg)
+	root.add_child(title)
+	var ads_left := maxi(0, 3 - ads_used)
+	_shop_row("Ролик +1", "осталось %d" % ads_left, _on_offer_ad)
+	_shop_row("+2", "40 монет", _buy_adds)
+	_shop_row("+3", "15 ₽", func() -> void: _ask_pay(3, 15))
+	_shop_row("+8", "29 ₽", func() -> void: _ask_pay(8, 29))
+	_shop_row("+20", "49 ₽", func() -> void: _ask_pay(20, 49))
+	_shop_row("Закрыть", "", func() -> void:
+		offer = false
+		_show("play")
+	)
+
+
+func _on_offer_ad() -> void:
+	_ask_ad("adds")
+	pay_adds = n
+	pay_rub = rub
+	offer = false
+	_show(screen if screen == "shop" or screen == "play" else "play")
+
+
+func _draw_pay(root: VBoxContainer) -> void:
+	var title := Label.new()
+	title.text = "Оплата +%d за %d ₽" % [pay_adds, pay_rub]
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	title.add_theme_color_override("font_color", _pal().fg)
+	root.add_child(title)
+	var note := Label.new()
+	note.text = "Заглушка RuStore: деньги не списываются."
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.add_theme_color_override("font_color", _pal().muted)
+	root.add_child(note)
+	_shop_row("Подтвердить", "", _confirm_pay)
+	_shop_row("Отмена", "", func() -> void:
+		pay_adds = 0
+		_toast("Оплата отменена")
+		_show(screen)
+	)
+
+
+func _confirm_pay() -> void:
+	var n := pay_adds
+	_grant_adds(n)
+	pay_adds = 0
+	_log("pay +%d" % n)
+	_toast("+%d. Деньги не списаны" % n)
+	_show(screen)
+	_toast("+%d. Деньги не списаны" % n)
+
+
+func _grant_adds(n: int) -> void:
+	if in_game:
+		adds_left += n
+	else:
+		extra_adds += n
+	_save_meta()
+
+
+func _ask_ad(kind: String) -> void:
+	if kind == "adds" and ads_used >= 3:
+		_toast("Роликов в этой партии больше нет")
+		return
+	ad_reward = kind
+	offer = false
+	_show(screen if screen == "shop" or screen == "play" else "menu")
+
+
+func _draw_ad(root: VBoxContainer) -> void:
+	var title := Label.new()
+	title.text = "Ролик: +50 монет" if ad_reward == "coins" else "Ролик: +1 дописывание"
+	title.add_theme_color_override("font_color", _pal().fg)
+	root.add_child(title)
+	_shop_row("Досмотрел — забрать", "", _claim_ad)
+	_shop_row("Закрыть без награды", "", func() -> void:
+		ad_reward = ""
+		_toast("Награды нет")
+		_show(screen)
+	)
+
+
+func _claim_ad() -> void:
+	if ad_reward == "coins":
+		coins += 50
+		_toast("+50 монет")
+	elif ad_reward == "adds":
+		if ads_used < 3:
+			ads_used += 1
+			_grant_adds(1)
+			_toast("+1 дописывание")
+	ad_reward = ""
+	_save_meta()
+	_show(screen)
 
 
 func _on_undo_pressed() -> void:
@@ -770,10 +890,11 @@ func _buy_adds() -> void:
 		adds_left += 2
 	else:
 		extra_adds += 2
+	offer = false
 	_save_meta()
-	_toast("+2 добавления")
-	_show("shop")
-	_toast("+2 добавления")
+	_toast("+2 дописывания")
+	_show(screen)
+	_toast("+2 дописывания")
 
 
 func _buy_no_ads() -> void:
@@ -817,6 +938,7 @@ func _save_meta() -> void:
 	cfg.set_value("game", "in_game", in_game)
 	cfg.set_value("game", "moves", moves)
 	cfg.set_value("game", "adds_left", adds_left)
+	cfg.set_value("game", "ads_used", ads_used)
 	cfg.set_value("game", "grid", JSON.stringify(grid))
 	cfg.save("user://tsifry.cfg")
 
@@ -835,6 +957,7 @@ func _load_meta() -> void:
 	if in_game:
 		moves = int(cfg.get_value("game", "moves", 0))
 		adds_left = int(cfg.get_value("game", "adds_left", ADDS_PER_GAME))
+		ads_used = int(cfg.get_value("game", "ads_used", 0))
 		var parsed = JSON.parse_string(str(cfg.get_value("game", "grid", "[]")))
 		if typeof(parsed) == TYPE_ARRAY and parsed.size() > 0:
 			grid = parsed
